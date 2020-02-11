@@ -1,9 +1,7 @@
 def addr_in_range(addr, prefix, mask):
     """Determines if the given addr is in the range spanned by the given prefix and subnet mask"""
     addr_bin = addr_to_binary(addr)
-    print("ADDR_BIN: " + str(addr_bin) + "\n")
     cidr_bin = addr_to_binary(prefix)[:calculate_cidr_number(prefix, mask)]
-    print("CIDR_BIN: " + str(cidr_bin) + "\n")
     return addr_bin.startswith(cidr_bin)
 
 
