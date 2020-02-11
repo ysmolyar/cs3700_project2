@@ -1,0 +1,26 @@
+DEBUG:root:sockets: {'192.168.0.2': <socket.socket fd=4, family=AddressFamily.AF_UNIX, type=2053, proto=0, raddr=192.168.0.2>, '172.168.0.2': <socket.socket fd=5, family=AddressFamily.AF_UNIX, type=2053, proto=0, raddr=172.168.0.2>}
+
+DEBUG:root:relations: {'192.168.0.2': 'cust', '172.168.0.2': 'cust'}
+
+DEBUG:root:msg: {'type': 'update', 'src': '192.168.0.2', 'dst': '192.168.0.1', 'msg': {'network': '192.168.0.0', 'netmask': '255.255.255.0', 'localpref': 100, 'ASPath': [1], 'origin': 'EGP', 'selfOrigin': True}}
+
+DEBUG:root:srcif: 192.168.0.2
+
+DEBUG:root:fwded update: {'type': 'update', 'src': '172.168.0.1', 'dst': '172.168.0.2', 'msg': {'network': '192.168.0.0', 'netmask': '255.255.255.0', 'localpref': 100, 'ASPath': [1, 14], 'origin': 'EGP', 'selfOrigin': True}}
+
+DEBUG:root:msg: {'type': 'update', 'src': '172.168.0.2', 'dst': '172.168.0.1', 'msg': {'network': '172.168.0.0', 'netmask': '255.255.0.0', 'localpref': 100, 'ASPath': [2], 'origin': 'EGP', 'selfOrigin': True}}
+
+DEBUG:root:srcif: 172.168.0.2
+
+DEBUG:root:fwded update: {'type': 'update', 'src': '192.168.0.1', 'dst': '192.168.0.2', 'msg': {'network': '172.168.0.0', 'netmask': '255.255.0.0', 'localpref': 100, 'ASPath': [2, 14], 'origin': 'EGP', 'selfOrigin': True}}
+
+DEBUG:root:msg: {'type': 'data', 'src': '192.168.0.25', 'dst': '172.168.0.25', 'msg': 'a7f18398c30be32cad1a7eb2a575a2186aab9333bf796ae1d345320e62c67dcccc5009908b70957aefc97dbde3c2adcc'}
+
+DEBUG:root:fwd_table: {'192.168.0.2': [{'network': '192.168.0.0', 'netmask': '255.255.255.0', 'localpref': 100, 'ASPath': [1], 'origin': 'EGP', 'selfOrigin': True}], '172.168.0.2': [{'network': '172.168.0.0', 'netmask': '255.255.0.0', 'localpref': 100, 'ASPath': [2], 'origin': 'EGP', 'selfOrigin': True}]}
+
+DEBUG:root:msg: {'type': 'data', 'src': '172.168.0.25', 'dst': '192.168.0.25', 'msg': '72a1c832664ee3cae73c201937677dcd04e62b4f69f08fd405ab7d754416f62c27d31b50cde336ebe8fd68fc7abc7282'}
+
+DEBUG:root:fwd_table: {'192.168.0.2': [{'network': '192.168.0.0', 'netmask': '255.255.255.0', 'localpref': 100, 'ASPath': [1], 'origin': 'EGP', 'selfOrigin': True}], '172.168.0.2': [{'network': '172.168.0.0', 'netmask': '255.255.0.0', 'localpref': 100, 'ASPath': [2], 'origin': 'EGP', 'selfOrigin': True}]}
+
+DEBUG:root:msg: {'type': 'dump', 'src': '192.168.0.2', 'dst': '192.168.0.1', 'msg': {}}
+
