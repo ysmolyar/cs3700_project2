@@ -103,7 +103,7 @@ class Router:
             if route[LPRF] == max_pref:
                 outroutes.append(route)
 
-        print("get_highest_preference: " + str(outroutes) + "\n")
+        # print("get_highest_preference: " + str(outroutes) + "\n")
         return outroutes
 
     def get_self_origin(self, routes):
@@ -117,7 +117,7 @@ class Router:
         if any(route[SORG] == True for route in routes):
             outroutes = [route for route in routes if route[SORG] == True]
 
-        print("get_self_origin: " + str(outroutes) + "\n")
+        # print("get_self_origin: " + str(outroutes) + "\n")
         return outroutes
 
     def get_origin_routes(self, routes):
@@ -139,7 +139,7 @@ class Router:
                 if route[ORIG] == 'UNK':
                     outroutes.append(route)
 
-        print("get_origin_routes: " + str(outroutes) + "\n")
+        # print("get_origin_routes: " + str(outroutes) + "\n")
         return outroutes
 
     def lowest_ip_address(self, routes):
@@ -153,12 +153,14 @@ class Router:
             if route[PEER] == lowest_address:
                 outroutes.append(route)
 
-        print("lowest_ip_address: " + str(outroutes) + "\n")
+        # print("lowest_ip_address: " + str(outroutes) + "\n")
         return outroutes
 
     def get_longest_prefix(self, routes):
-
         outroutes = []
+        if len(routes) == 0:
+            return None
+
         max_pref = calculate_cidr_number(routes[0][NTWK], routes[0][NMSK])
 
         for route in routes:
@@ -168,26 +170,28 @@ class Router:
         for route in routes:
             pref = calculate_cidr_number(route[NTWK], route[NMSK])
             if pref == max_pref:
-                outroutes.append(route)
-        print("get_longest_prefix: " + str(outroutes) + "\n")
-        return outroutes
+                return route
+
+        return None
+        # print("get_longest_prefix: " + str(outroutes) + "\n")
 
     def filter_relationships(self, srcif, routes):
         """ Don't allow Peer->Peer, Peer->Prov, or Prov->Peer forwards """
         outroutes = []
+        print()
         if self.relations[srcif] == CUST:
-            return routes
+            outroutes = routes
         elif self.relations[srcif] == PEER:
             for route in routes: 
                 if self.relations[route[PEER]] == CUST:
                     outroutes.append(route)
-
         else:
             for route in routes:
                 if self.relations[route[PEER]] != PEER:
                     outroutes.append(route)
 
-        return outroutes[0] if len(outroutes) == 1 else None
+        # print("filter_relationships: " + str(outroutes) + "\n")
+        return outroutes
 
     def get_route(self, srcif, daddr):
         """
@@ -195,23 +199,18 @@ class Router:
             (1) which route (if any) in the forwarding table is the best route to use for the given destination IP
             (2) whether the data packet is being forwarded legally
         """
-        # TODO
         peer = None
-        logging.debug("fwd_table: " + str(self.routes) + "\n")
         initial_routes = self.lookup_routes(daddr)
-        print("INITIAL ROUTES: " + str(initial_routes) + "\n")
-
+        # print("INITIAL ROUTES: " + str(initial_routes) + "\n")
+        # print("CONSIDERING SENDING DATA PACKET: " + str(daddr) + "\n")
         if len(initial_routes) == 0:
             packet = {'src': daddr[DEST], 'dst': srcif, 'type': NRTE, 'msg': {}}
             self.sockets[srcif].sendall(json.dumps(packet).encode(UTF8))
 
-        if len(initial_routes) == 1:
-            self.sockets[initial_routes[0][PEER]].sendall(json.dumps(daddr).encode(UTF8))
         # Rules go here
         else:
-            routes = self.get_longest_prefix(initial_routes)
             # 1. Highest Preference
-            routes = self.get_highest_preference(routes)
+            routes = self.get_highest_preference(initial_routes)
             # 2. Self Origin
             routes = self.get_self_origin(routes)
             # 3. Shortest ASPath
@@ -219,20 +218,22 @@ class Router:
             # 4. EGP > IGP > UNK
             routes = self.get_origin_routes(routes)
             # 5. Lowest IP Address
-            # TODO
-            routes  = self.lowest_ip_address(routes)
+            routes = self.lowest_ip_address(routes)
             # Final check: enforce peering relationships
             routes = self.filter_relationships(srcif, routes)
-            print("MY TABLE: " + str(self.routes) + "\n")
+            # In case of multiple routes, longest prefix wins
+            route = self.get_longest_prefix(routes)
+            # print("MY TABLE: " + str(self.routes) + "\n")
             print("FINAL ROUTES: " + str(routes) + "\n")
-            print("srcif: " + str(srcif) + "\n")
-            print("data packer: " + str(daddr) + "\n")
-
-            if len(routes) == 0:
-                packet = {'src': daddr[DEST], 'dst': srcif, 'type': NRTE, 'msg': {}}
+            # print("srcif: " + str(srcif) + "\n")
+            # print("data packet: " + str(daddr) + "\n")
+            if route is None:
+                packet = {'src': get_self_ip(srcif), 'dst': daddr[SRCE], 'type': NRTE, 'msg': {}}
+                print("****sending no route: " + str(packet) + "\n")
                 self.sockets[srcif].sendall(json.dumps(packet).encode(UTF8))
-            elif len(routes) == 1:
-                self.sockets[routes[0][PEER]].sendall(json.dumps(daddr).encode(UTF8))
+            else:
+                print("****sending data packet: " + str(daddr) + " to " + srcif + "\n")
+                self.sockets[route[PEER]].sendall(json.dumps(daddr).encode(UTF8))
 
         return self.sockets[peer] if peer else None
 
@@ -353,6 +354,8 @@ class Router:
 
     def handle_packet(self, srcif, packet):
         """ dispatches a packet """
+        print(packet)
+        print()
         if packet["type"] == WAIT:
             pass
         elif packet["type"] == UPDT:
