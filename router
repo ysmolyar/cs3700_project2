@@ -249,10 +249,15 @@ class Router:
 
     def create_update_packet(self, packet, dest):
         """update packet src, dest, ASPath, and return updated packet"""
+        packet_cpy = self.create_revk_packet(packet, dest)
+        packet_cpy[MESG][APTH].append(self.asn)
+        return packet_cpy
+
+    def create_revk_packet(self, packet, dest):
+        """update packet src, dest, and return updated packet"""
         packet_cpy = copy.deepcopy(packet)
         packet_cpy[SRCE] = dest[:-1] + '1'
         packet_cpy[DEST] = dest
-        packet_cpy[MESG][APTH].append(self.asn)
         return packet_cpy
 
     def update(self, srcif, packet):
@@ -265,8 +270,10 @@ class Router:
                 - if Update received from a peer or a provider: only send updates to your customers
         """
         # (1)
-        self.updates[packet[SRCE]] = packet
-        logging.debug("srcif: " + srcif + "\n")
+        if packet[SRCE] not in self.updates:
+            self.updates[packet[SRCE]] = []
+
+        self.updates[packet[SRCE]].append(packet);
 
         # (2)
         if srcif not in self.routes:
@@ -280,20 +287,47 @@ class Router:
             for addr, sock in self.sockets.items():
                 if addr != srcif:
                     new_packet = self.create_update_packet(packet, addr)
-                    logging.debug("fwded update: " + str(new_packet) + "\n")
                     sock.sendall(json.dumps(new_packet).encode(UTF8))
         else:
             for addr, sock in self.sockets.items():
                 if addr != srcif and self.relations[addr] == CUST:
                     new_packet = self.create_update_packet(packet, addr)
-                    logging.debug("fwded update: " + str(new_packet) + "\n")
                     sock.sendall(json.dumps(new_packet).encode(UTF8))
 
         return False
 
-    def revoke(self, packet):
-        """ handle revoke packets """
-        # TODO
+    def revoke(self, srcif, packet):
+        """
+        handle revoke packets:
+            (1) save a copy of the revocation, in case you need it later
+            (2) remove the dead entry from the forwarding table
+            (3) potentially send copies of the announcement to neighboring routers
+        """
+        # (1)
+        if packet[SRCE] not in self.updates:
+            self.updates[packet[SRCE]] = []
+
+        self.updates[packet[SRCE]].append(packet);
+
+        # (2)
+        for revk_route in packet[MESG]:
+            to_revk = [obj for obj in self.routes[srcif] if
+                       obj[NTWK] == revk_route[NTWK] and obj[NMSK] == revk_route[NMSK]]
+            for obj in to_revk:
+                self.routes[srcif].remove(obj)
+
+        # (3)
+        if self.relations[srcif] == CUST:
+            for addr, sock in self.sockets.items():
+                if addr != srcif:
+                    new_packet = self.create_revk_packet(packet, addr)
+                    sock.sendall(json.dumps(new_packet).encode(UTF8))
+        else:
+            for addr, sock in self.sockets.items():
+                if addr != srcif and self.relations[addr] == CUST:
+                    new_packet = self.create_revk_packet(packet, addr)
+                    sock.sendall(json.dumps(new_packet).encode(UTF8))
+
         return True
 
     def dump(self, packet):
@@ -328,7 +362,7 @@ class Router:
         elif packet["type"] == DUMP:
             self.dump(packet)
         elif packet["type"] == RVKE:
-            self.revoke(packet)
+            self.revoke(srcif, packet)
         elif packet["type"] == NRTE:
             self.no_route(srcif, packet)
 
