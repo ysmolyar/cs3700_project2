@@ -145,30 +145,31 @@ class Router:
     def lowest_ip_address(self, routes):
 
         outroutes = []
-        lowest_address = routes[0][PEER] if len(routes) > 0 else 0
+        lowest_address = routes[0][PEER].split('.')[0] if len(routes) > 0 else 0
         for route in routes:
-            lowest_address = lowest_address if lowest_address < route[PEER] else route[PEER]
+            word = route[PEER].split('.')[0]
+            lowest_address = lowest_address if lowest_address < word else word
 
         for route in routes:
-            if route[PEER] == lowest_address:
+            word = route[PEER].split('.')[0]
+            if word == lowest_address:
                 outroutes.append(route)
 
         # print("lowest_ip_address: " + str(outroutes) + "\n")
         return outroutes
 
     def get_longest_prefix(self, routes):
-        outroutes = []
         if len(routes) == 0:
             return None
 
-        max_pref = calculate_cidr_number(routes[0][NTWK], routes[0][NMSK])
+        max_pref = get_cidr_number(routes[0][NMSK])
 
         for route in routes:
-            pref = calculate_cidr_number(route[NTWK], route[NMSK])
+            pref = get_cidr_number(route[NMSK])
             max_pref = max_pref if max_pref > pref else pref
 
         for route in routes:
-            pref = calculate_cidr_number(route[NTWK], route[NMSK])
+            pref = get_cidr_number(route[NMSK])
             if pref == max_pref:
                 return route
 
@@ -178,7 +179,6 @@ class Router:
     def filter_relationships(self, srcif, routes):
         """ Don't allow Peer->Peer, Peer->Prov, or Prov->Peer forwards """
         outroutes = []
-        print()
         if self.relations[srcif] == CUST:
             outroutes = routes
         elif self.relations[srcif] == PEER:
@@ -224,15 +224,15 @@ class Router:
             # In case of multiple routes, longest prefix wins
             route = self.get_longest_prefix(routes)
             # print("MY TABLE: " + str(self.routes) + "\n")
-            print("FINAL ROUTES: " + str(routes) + "\n")
+            # print("FINAL ROUTES: " + str(routes) + "\n")
             # print("srcif: " + str(srcif) + "\n")
             # print("data packet: " + str(daddr) + "\n")
             if route is None:
                 packet = {'src': get_self_ip(srcif), 'dst': daddr[SRCE], 'type': NRTE, 'msg': {}}
-                print("****sending no route: " + str(packet) + "\n")
+                # print("****sending no route: " + str(packet) + "\n")
                 self.sockets[srcif].sendall(json.dumps(packet).encode(UTF8))
             else:
-                print("****sending data packet: " + str(daddr) + " to " + srcif + "\n")
+                # print("****sending data packet: " + str(daddr) + " to " + srcif + "\n")
                 self.sockets[route[PEER]].sendall(json.dumps(daddr).encode(UTF8))
 
         return self.sockets[peer] if peer else None
@@ -243,9 +243,55 @@ class Router:
         # TODO
         return False
 
-    def coalesce(self):
-        """ coalesce any routes that are right next to each other """
-        # TODO (this is the most difficult task, save until last)
+    def can_coalesce(self, route_1, route_2):
+        """
+        Determines if routes can be coalesced. Routes can be coalesced if:
+            (1) adjacent numerically
+            (2) forward to the same next-hop router
+            (3) have the same attributes
+        Condition 2 is already satisfied by the structure of the forwarding table.
+        :param route_1: route 1
+        :param route_2: route 2
+        :return: True or False; whether or not routes can coalesce
+        """
+        mask_length = get_cidr_number(route_1[NMSK])
+
+        adjacent = (get_cidr_number(route_1[NMSK]) == get_cidr_number(route_2[NMSK]) and
+                    get_subnet(route_1[NTWK], route_1[NMSK]) != get_subnet(route_2[NTWK], route_2[NMSK]) and
+                    addr_to_binary(route_1[NTWK])[:mask_length-1] == addr_to_binary(route_2[NTWK])[:mask_length-1])
+
+        same_attributes = (route_1[LPRF] == route_2[LPRF] and
+                           route_1[SORG] == route_2[SORG] and
+                           route_1[APTH] == route_2[APTH] and
+                           route_1[ORIG] == route_2[ORIG])
+        return adjacent and same_attributes
+
+    def coalesce(self, new_route):
+        """
+        coalesce any routes that are right next to each other:
+        """
+        if new_route not in self.routes[new_route[PEER]]:
+            self.routes[new_route[PEER]].append(new_route)
+
+        for route in self.routes[new_route[PEER]]:
+            if self.can_coalesce(route, new_route):
+                self.routes[new_route[PEER]].remove(new_route)
+                new_network = binary_to_addr(bin(int(addr_to_binary(route[NTWK]), 2) &
+                                                 int(addr_to_binary(route[NMSK]), 2))[2:])
+                comb_route = {
+                    NTWK: new_network,
+                    NMSK: decrement_mask(route[NMSK]),
+                    LPRF: route[LPRF],
+                    APTH: route[APTH],
+                    ORIG: route[ORIG],
+                    SORG: route[SORG],
+                    PEER: route[PEER]
+                }
+
+                self.routes[new_route[PEER]].remove(route)
+                self.routes[new_route[PEER]].append(comb_route)
+                self.coalesce(comb_route)
+
         return False
 
     def create_update_packet(self, packet, dest):
@@ -270,19 +316,19 @@ class Router:
                 - if Update received from a customer: send updates to all other neighbors
                 - if Update received from a peer or a provider: only send updates to your customers
         """
+        msg = copy.deepcopy(packet)
+        msg[MESG][PEER] = srcif
         # (1)
         if packet[SRCE] not in self.updates:
             self.updates[packet[SRCE]] = []
 
-        self.updates[packet[SRCE]].append(packet);
+        self.updates[packet[SRCE]].append(msg)
 
         # (2)
         if srcif not in self.routes:
             self.routes[srcif] = []
-        msg = copy.deepcopy(packet[MESG])
-        msg[PEER] = srcif
-        self.routes[srcif].append(msg)
 
+        self.coalesce(msg[MESG])
         # (3)
         if self.relations[srcif] == CUST:
             for addr, sock in self.sockets.items():
@@ -305,17 +351,33 @@ class Router:
             (3) potentially send copies of the announcement to neighboring routers
         """
         # (1)
+        print("table before revoke")
+        print(self.routes)
+        print()
+        print()
         if packet[SRCE] not in self.updates:
             self.updates[packet[SRCE]] = []
 
         self.updates[packet[SRCE]].append(packet);
 
         # (2)
-        for revk_route in packet[MESG]:
-            to_revk = [obj for obj in self.routes[srcif] if
-                       obj[NTWK] == revk_route[NTWK] and obj[NMSK] == revk_route[NMSK]]
-            for obj in to_revk:
-                self.routes[srcif].remove(obj)
+        new_updates = []
+        # print("updates")
+        # print(self.updates)
+        for update in self.updates[packet[SRCE]]:
+            if update[TYPE] == 'update':
+                new_updates.append(update)
+            elif update[TYPE] == 'revoke':
+                for msg in update[MESG]:
+                    for upd in new_updates:
+                        # print("revoke")
+                        # print(upd)
+                        if upd[MESG][NTWK] == msg[NTWK] and upd[MESG][NMSK] == msg[NMSK]:
+                            new_updates.remove(upd)
+
+        self.routes[srcif] = []
+        for update in new_updates:
+            self.coalesce(update[MESG])
 
         # (3)
         if self.relations[srcif] == CUST:
@@ -354,8 +416,6 @@ class Router:
 
     def handle_packet(self, srcif, packet):
         """ dispatches a packet """
-        print(packet)
-        print()
         if packet["type"] == WAIT:
             pass
         elif packet["type"] == UPDT:
@@ -391,7 +451,6 @@ class Router:
                         if self.sockets[sock] == conn:
                             srcif = sock
                     msg = json.loads(k)
-                    logging.debug("msg: " + str(msg) + "\n")
                     if not self.handle_packet(srcif, msg):
                         self.send_error(conn, msg)
                 else:
