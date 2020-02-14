@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-""" Skeleton Implementation of Project 2 for NEU CS3700 """
+""" BGP Router Implementation for CS3700 Project 2 """
 
 import argparse
 import json
 import select
 import socket
-import logging
 import copy
 from utils import *
 
@@ -42,10 +41,8 @@ PROV = "prov"
 # string encoding
 UTF8 = "utf-8"
 
-logging.basicConfig(filename="debug.log", level=logging.DEBUG, filemode="w")
-
-
 ##########################################################################################
+
 
 class Router:
     """ Your Router """
@@ -64,7 +61,11 @@ class Router:
             self.relations[network] = relation
 
     def lookup_routes(self, daddr):
-        """ Lookup all valid routes for an address """
+        """
+        Lookup all valid routes for an address
+        :param daddr: data packet being sent
+        :return: possible routes to deliver packet
+        """
         outroutes = []
 
         for addr in self.routes:
@@ -77,8 +78,11 @@ class Router:
         return outroutes
 
     def get_shortest_as_path(self, routes):
-        """ select the route with the shortest AS Path """
-        # TODO
+        """
+        Select the route with the shortest AS Path
+        :param routes: possible routes
+        :return: routes filtered by shortest AS Path
+        """
         outroutes = []
         min_asn_length = len(routes[0][APTH]) if len(routes) > 0 else 0
 
@@ -92,8 +96,11 @@ class Router:
         return outroutes
 
     def get_highest_preference(self, routes):
-        """ select the route with the shortest AS Path """
-        # TODO
+        """
+        Select the route with the highest localpref
+        :param routes: possible routes
+        :return: routes filtered by highest localpref
+        """
         outroutes = []
         max_pref = routes[0][LPRF]
         for route in routes:
@@ -103,26 +110,30 @@ class Router:
             if route[LPRF] == max_pref:
                 outroutes.append(route)
 
-        # print("get_highest_preference: " + str(outroutes) + "\n")
         return outroutes
 
     def get_self_origin(self, routes):
-        """ select self originating routes """
-        # TODO
+        """
+        Select self originating routes
+        :param routes: possible routes
+        :return: routes filtered with preference to self-originating routes
+        """
         outroutes = []
 
-        if len(routes) <= 1 or not any(route[SORG] == True for route in routes):
+        if len(routes) <= 1 or not any(route[SORG] is True for route in routes):
             outroutes = routes
 
-        if any(route[SORG] == True for route in routes):
-            outroutes = [route for route in routes if route[SORG] == True]
+        if any(route[SORG] is True for route in routes):
+            outroutes = [route for route in routes if route[SORG] is True]
 
-        # print("get_self_origin: " + str(outroutes) + "\n")
         return outroutes
 
     def get_origin_routes(self, routes):
-        """ select origin routes: IGP > EGP > UNK """
-        # TODO
+        """
+        Select origin routes with rules: IGP > EGP > UNK
+        :param routes: possible routes
+        :return: routes filtered with preference to origins IGP > EGP > UNK
+        """
         outroutes = []
 
         for route in routes:
@@ -139,10 +150,14 @@ class Router:
                 if route[ORIG] == 'UNK':
                     outroutes.append(route)
 
-        # print("get_origin_routes: " + str(outroutes) + "\n")
         return outroutes
 
     def lowest_ip_address(self, routes):
+        """
+        Select lowest IP address of routes
+        :param routes: possible routes
+        :return: routes filtered with preference to lower IP addresses
+        """
 
         outroutes = []
         lowest_address = routes[0][PEER].split('.')[0] if len(routes) > 0 else 0
@@ -155,10 +170,14 @@ class Router:
             if word == lowest_address:
                 outroutes.append(route)
 
-        # print("lowest_ip_address: " + str(outroutes) + "\n")
         return outroutes
 
     def get_longest_prefix(self, routes):
+        """
+        As tie-breaker, select route with longest matching prefix
+        :param routes: routes to break tie
+        :return: single route with longest matching prefix
+        """
         if len(routes) == 0:
             return None
 
@@ -174,15 +193,20 @@ class Router:
                 return route
 
         return None
-        # print("get_longest_prefix: " + str(outroutes) + "\n")
 
     def filter_relationships(self, srcif, routes):
-        """ Don't allow Peer->Peer, Peer->Prov, or Prov->Peer forwards """
+        """
+        Filter routes by relationship with next-hop router.
+        Don't allow Peer->Peer, Peer->Prov, or Prov->Peer forwards
+        :param srcif: source interface
+        :param routes: possible routes
+        :return: subset of routes that follow above rules
+        """
         outroutes = []
         if self.relations[srcif] == CUST:
             outroutes = routes
         elif self.relations[srcif] == PEER:
-            for route in routes: 
+            for route in routes:
                 if self.relations[route[PEER]] == CUST:
                     outroutes.append(route)
         else:
@@ -190,58 +214,27 @@ class Router:
                 if self.relations[route[PEER]] != PEER:
                     outroutes.append(route)
 
-        # print("filter_relationships: " + str(outroutes) + "\n")
         return outroutes
 
-    def get_route(self, srcif, daddr):
+    def disaggregate(self, srcif, packet):
         """
-        Select the best route for a given address. Determine:
-            (1) which route (if any) in the forwarding table is the best route to use for the given destination IP
-            (2) whether the data packet is being forwarded legally
+        Modify forwarding table after revoke message
+        :param srcif: source interface of packet
+        :param packet: revoke packet
         """
-        peer = None
-        initial_routes = self.lookup_routes(daddr)
-        # print("INITIAL ROUTES: " + str(initial_routes) + "\n")
-        # print("CONSIDERING SENDING DATA PACKET: " + str(daddr) + "\n")
-        if len(initial_routes) == 0:
-            packet = {'src': daddr[DEST], 'dst': srcif, 'type': NRTE, 'msg': {}}
-            self.sockets[srcif].sendall(json.dumps(packet).encode(UTF8))
+        new_updates = []
+        for update in self.updates[packet[SRCE]]:
+            if update[TYPE] == 'update':
+                new_updates.append(update)
+            elif update[TYPE] == 'revoke':
+                for msg in update[MESG]:
+                    for upd in new_updates:
+                        if upd[MESG][NTWK] == msg[NTWK] and upd[MESG][NMSK] == msg[NMSK]:
+                            new_updates.remove(upd)
 
-        # Rules go here
-        else:
-            # 1. Highest Preference
-            routes = self.get_highest_preference(initial_routes)
-            # 2. Self Origin
-            routes = self.get_self_origin(routes)
-            # 3. Shortest ASPath
-            routes = self.get_shortest_as_path(routes)
-            # 4. EGP > IGP > UNK
-            routes = self.get_origin_routes(routes)
-            # 5. Lowest IP Address
-            routes = self.lowest_ip_address(routes)
-            # Final check: enforce peering relationships
-            routes = self.filter_relationships(srcif, routes)
-            # In case of multiple routes, longest prefix wins
-            route = self.get_longest_prefix(routes)
-            # print("MY TABLE: " + str(self.routes) + "\n")
-            # print("FINAL ROUTES: " + str(routes) + "\n")
-            # print("srcif: " + str(srcif) + "\n")
-            # print("data packet: " + str(daddr) + "\n")
-            if route is None:
-                packet = {'src': get_self_ip(srcif), 'dst': daddr[SRCE], 'type': NRTE, 'msg': {}}
-                # print("****sending no route: " + str(packet) + "\n")
-                self.sockets[srcif].sendall(json.dumps(packet).encode(UTF8))
-            else:
-                # print("****sending data packet: " + str(daddr) + " to " + srcif + "\n")
-                self.sockets[route[PEER]].sendall(json.dumps(daddr).encode(UTF8))
-
-        return self.sockets[peer] if peer else None
-
-    def forward(self, srcif, packet):
-        """ Forward a data packet """
-
-        # TODO
-        return False
+        self.routes[srcif] = []
+        for update in new_updates:
+            self.coalesce(update[MESG])
 
     def can_coalesce(self, route_1, route_2):
         """
@@ -268,7 +261,9 @@ class Router:
 
     def coalesce(self, new_route):
         """
-        coalesce any routes that are right next to each other:
+        Coalesce any routes that are right next to each other:
+        :param new_route: route to coalesce into forwarding table
+        :return: True
         """
         if new_route not in self.routes[new_route[PEER]]:
             self.routes[new_route[PEER]].append(new_route)
@@ -292,7 +287,7 @@ class Router:
                 self.routes[new_route[PEER]].append(comb_route)
                 self.coalesce(comb_route)
 
-        return False
+        return True
 
     def create_update_packet(self, packet, dest):
         """update packet src, dest, ASPath, and return updated packet"""
@@ -307,17 +302,87 @@ class Router:
         packet_cpy[DEST] = dest
         return packet_cpy
 
+    def broadcast_msg(self, srcif, packet, type):
+        """
+        Broadcasts update and revoke messages to neighboring routers. Broadcast if:
+            - message received from a customer: send updates to all other neighbors
+            - message received from a peer or a provider: only send updates to your customers
+        :param srcif: source interface of packet
+        :param packet: packet to broadcast
+        :param type: type of message to broadcast, 'update' or 'revoke'
+        :return:
+        """
+        if self.relations[srcif] == CUST:
+            for addr, sock in self.sockets.items():
+                if addr != srcif:
+                    new_packet = {}
+                    if type == UPDT:
+                        new_packet = self.create_update_packet(packet, addr)
+                    elif type == RVKE:
+                        new_packet = self.create_revk_packet(packet, addr)
+                    sock.sendall(json.dumps(new_packet).encode(UTF8))
+        else:
+            for addr, sock in self.sockets.items():
+                if addr != srcif and self.relations[addr] == CUST:
+                    new_packet = {}
+                    if type == UPDT:
+                        new_packet = self.create_update_packet(packet, addr)
+                    elif type == RVKE:
+                        new_packet = self.create_revk_packet(packet, addr)
+                    sock.sendall(json.dumps(new_packet).encode(UTF8))
+
+    def get_route(self, srcif, daddr):
+        """
+        Select the best route for a given address. Determine:
+            (1) which route (if any) in the forwarding table is the best route to use for the given destination IP
+            (2) whether the data packet is being forwarded legally
+        :param srcif: source interface
+        :param daddr: data packet to send
+        """
+        routes = self.lookup_routes(daddr)
+
+        # Rules go here
+        # 1. Highest Preference
+        routes = self.get_highest_preference(routes)
+        # 2. Self Origin
+        routes = self.get_self_origin(routes)
+        # 3. Shortest ASPath
+        routes = self.get_shortest_as_path(routes)
+        # 4. EGP > IGP > UNK
+        routes = self.get_origin_routes(routes)
+        # 5. Lowest IP Address
+        routes = self.lowest_ip_address(routes)
+        # Final check: enforce peering relationships
+        routes = self.filter_relationships(srcif, routes)
+        # In case of multiple routes, longest prefix wins
+        route = self.get_longest_prefix(routes)
+
+        if route is None:
+            self.no_route(srcif, daddr)
+        else:
+            self.forward(route[PEER], daddr)
+
+    def forward(self, srcif, packet):
+        """
+        Forwards a data packet
+        :param srcif: source interface of packet
+        :param packet: packet to forward
+        :return: True
+        """
+        self.sockets[srcif].sendall(json.dumps(packet).encode(UTF8))
+        return True
+
     def update(self, srcif, packet):
         """
         handle update packets:
             (1) save a copy of the announcement in case you need it later
             (2) add an entry to your forwarding table
             (3) potentially send copies of the announcement to neighboring routers
-                - if Update received from a customer: send updates to all other neighbors
-                - if Update received from a peer or a provider: only send updates to your customers
+
         """
         msg = copy.deepcopy(packet)
         msg[MESG][PEER] = srcif
+
         # (1)
         if packet[SRCE] not in self.updates:
             self.updates[packet[SRCE]] = []
@@ -329,19 +394,11 @@ class Router:
             self.routes[srcif] = []
 
         self.coalesce(msg[MESG])
-        # (3)
-        if self.relations[srcif] == CUST:
-            for addr, sock in self.sockets.items():
-                if addr != srcif:
-                    new_packet = self.create_update_packet(packet, addr)
-                    sock.sendall(json.dumps(new_packet).encode(UTF8))
-        else:
-            for addr, sock in self.sockets.items():
-                if addr != srcif and self.relations[addr] == CUST:
-                    new_packet = self.create_update_packet(packet, addr)
-                    sock.sendall(json.dumps(new_packet).encode(UTF8))
 
-        return False
+        # (3)
+        self.broadcast_msg(srcif, packet, UPDT)
+
+        return True
 
     def revoke(self, srcif, packet):
         """
@@ -349,55 +406,33 @@ class Router:
             (1) save a copy of the revocation, in case you need it later
             (2) remove the dead entry from the forwarding table
             (3) potentially send copies of the announcement to neighboring routers
+        :param srcif: source interface
+        :param packet: revoke packet
+        :return: True
         """
         # (1)
-        print("table before revoke")
-        print(self.routes)
-        print()
-        print()
         if packet[SRCE] not in self.updates:
             self.updates[packet[SRCE]] = []
 
         self.updates[packet[SRCE]].append(packet);
 
         # (2)
-        new_updates = []
-        # print("updates")
-        # print(self.updates)
-        for update in self.updates[packet[SRCE]]:
-            if update[TYPE] == 'update':
-                new_updates.append(update)
-            elif update[TYPE] == 'revoke':
-                for msg in update[MESG]:
-                    for upd in new_updates:
-                        # print("revoke")
-                        # print(upd)
-                        if upd[MESG][NTWK] == msg[NTWK] and upd[MESG][NMSK] == msg[NMSK]:
-                            new_updates.remove(upd)
-
-        self.routes[srcif] = []
-        for update in new_updates:
-            self.coalesce(update[MESG])
+        self.disaggregate(srcif, packet)
 
         # (3)
-        if self.relations[srcif] == CUST:
-            for addr, sock in self.sockets.items():
-                if addr != srcif:
-                    new_packet = self.create_revk_packet(packet, addr)
-                    sock.sendall(json.dumps(new_packet).encode(UTF8))
-        else:
-            for addr, sock in self.sockets.items():
-                if addr != srcif and self.relations[addr] == CUST:
-                    new_packet = self.create_revk_packet(packet, addr)
-                    sock.sendall(json.dumps(new_packet).encode(UTF8))
+        self.broadcast_msg(srcif, packet, RVKE)
 
         return True
 
     def dump(self, packet):
-        """ handles dump table requests """
+        """
+        Handles dump table requests
+        :param packet: dump request packet
+        :return: True
+        """
         dump_packet = copy.deepcopy(packet)
         dest = dump_packet[SRCE]
-        dump_packet[SRCE] = dest[:-1] + '1'
+        dump_packet[SRCE] = get_self_ip(dest)
         dump_packet[DEST] = dest
         dump_packet[TYPE] = 'table'
         fwd = []
@@ -406,19 +441,29 @@ class Router:
                 fwd.append({'network': route[NTWK], 'netmask': route[NMSK], 'peer': route['peer']})
         dump_packet[MESG] = fwd
 
-        self.sockets[dump_packet[DEST]].sendall(json.dumps(dump_packet).encode(UTF8))
+        self.forward(dump_packet[DEST], dump_packet)
+        # self.sockets[dump_packet[DEST]].sendall(json.dumps(dump_packet).encode(UTF8))
         return True
 
     def no_route(self, srcif, packet):
-        """ sends no route message  """
-        # TODO
-        return False
+        """
+        Sends no route message
+        :param srcif: source interface
+        :param packet: packet that cannot be delivered
+        :return: True
+        """
+        msg = {'src': get_self_ip(srcif), 'dst': packet[SRCE], 'type': NRTE, 'msg': {}}
+        self.sockets[srcif].sendall(json.dumps(msg).encode(UTF8))
+        return True
 
     def handle_packet(self, srcif, packet):
-        """ dispatches a packet """
-        if packet["type"] == WAIT:
-            pass
-        elif packet["type"] == UPDT:
+        """
+        Dispatches a packet
+        :param srcif: source interface of packet
+        :param packet: packet to handle
+        :return: False if packet can't be handled
+        """
+        if packet["type"] == UPDT:
             self.update(srcif, packet)
         elif packet["type"] == DATA:
             self.get_route(srcif, packet)
@@ -426,8 +471,8 @@ class Router:
             self.dump(packet)
         elif packet["type"] == RVKE:
             self.revoke(srcif, packet)
-        elif packet["type"] == NRTE:
-            self.no_route(srcif, packet)
+        elif packet["type"] == WAIT:
+            pass
 
         return False
 
